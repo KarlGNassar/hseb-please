@@ -45,7 +45,7 @@ import {
   emptyBill,
   isBill,
   money,
-  toMinor,
+  updateLineTotal,
   type Bill,
   type Currency,
   type splitBill,
@@ -1173,58 +1173,59 @@ export function BillWorkspace({
                               }
                             />
                           </label>
-                          <input
-                            className="quantity-input"
-                            type="number"
-                            min="1"
-                            max="999"
-                            aria-label={`Quantity for ${item.name}`}
-                            value={item.quantity}
-                            onChange={(e) =>
-                              updateBill((b) => ({
-                                ...b,
-                                items: b.items.map((i) =>
-                                  i.id === item.id
-                                    ? {
-                                        ...i,
-                                        quantity: Math.max(
-                                          1,
-                                          Math.min(
-                                            999,
-                                            Math.floor(Number(e.target.value)),
+                          <label className="item-quantity">
+                            <span className="mobile-field-label">Qty</span>
+                            <input
+                              className="quantity-input"
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              max="999"
+                              aria-label={`Quantity for ${item.name}`}
+                              value={item.quantity}
+                              onChange={(e) =>
+                                updateBill((b) => ({
+                                  ...b,
+                                  items: b.items.map((i) =>
+                                    i.id === item.id
+                                      ? {
+                                          ...i,
+                                          quantity: Math.max(
+                                            1,
+                                            Math.min(
+                                              999,
+                                              Math.floor(
+                                                Number(e.target.value),
+                                              ),
+                                            ),
                                           ),
-                                        ),
-                                      }
-                                    : i,
-                                ),
-                              }))
-                            }
-                          />
-                          <input
-                            className="amount-input"
-                            type="number"
-                            min="0"
-                            step={bill.currency === "LBP" ? "1" : "0.01"}
-                            aria-label={`Line total for ${item.name}`}
-                            key={`${item.id}-${bill.currency}-${item.amount}`}
-                            defaultValue={currentAmount(item.amount)}
-                            onBlur={(e) =>
-                              updateBill((b) => ({
-                                ...b,
-                                items: b.items.map((i) =>
-                                  i.id === item.id
-                                    ? {
-                                        ...i,
-                                        amount: toMinor(
-                                          e.target.value,
-                                          b.currency,
-                                        ),
-                                      }
-                                    : i,
-                                ),
-                              }))
-                            }
-                          />
+                                        }
+                                      : i,
+                                  ),
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="item-amount">
+                            <span className="mobile-field-label">
+                              Line total
+                            </span>
+                            <input
+                              className="amount-input"
+                              type="number"
+                              inputMode="decimal"
+                              min="0"
+                              step={bill.currency === "LBP" ? "1" : "0.01"}
+                              aria-label={`Line total for ${item.name}`}
+                              key={`${item.id}-${bill.currency}-${item.amount}`}
+                              defaultValue={currentAmount(item.amount)}
+                              onBlur={(e) =>
+                                updateBill((b) =>
+                                  updateLineTotal(b, item.id, e.target.value),
+                                )
+                              }
+                            />
+                          </label>
                           <button
                             className="icon-button delete-item"
                             aria-label={`Remove ${item.name}`}

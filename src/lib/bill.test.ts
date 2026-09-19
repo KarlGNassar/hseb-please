@@ -7,8 +7,31 @@ import {
   isBill,
   splitBill,
   toMinor,
+  updateLineTotal,
 } from "./bill";
 import { canSplit, type Restaurant } from "./restaurants";
+
+test("manual totals detect lira without multiplying entered prices by 100", () => {
+  const bill = emptyBill();
+  bill.items = [
+    { id: "coffee", name: "Coffee", amount: 0, quantity: 1, personIds: [] },
+    { id: "tea", name: "Tea", amount: 0, quantity: 1, personIds: [] },
+  ];
+  const first = updateLineTotal(bill, "coffee", "60000");
+  assert.equal(first.currency, "USD");
+  const second = updateLineTotal(first, "tea", "60000");
+  assert.equal(second.currency, "LBP");
+  assert.deepEqual(
+    second.items.map((item) => item.amount),
+    [60000, 60000],
+  );
+  assert.equal(updateLineTotal(second, "tea", "90000").currency, "LBP");
+  assert.equal(updateLineTotal(bill, "coffee", "100000").currency, "USD");
+  const large = updateLineTotal(bill, "coffee", "125000");
+  assert.equal(large.currency, "LBP");
+  assert.equal(large.items[0].amount, 125000);
+  assert.equal(updateLineTotal(bill, "coffee", "10.01").items[0].amount, 1001);
+});
 
 test("largest remainder allocation preserves every cent with deterministic ties", () => {
   assert.deepEqual(allocate(100, [1, 1, 1]), [34, 33, 33]);

@@ -38,6 +38,39 @@ export function toMinor(value: string, currency: Currency): number {
     : 0;
 }
 
+// Evaluate displayed amounts before converting dollars to cents.
+export function inferAmountCurrency(
+  total: number,
+  fallback: Currency,
+): Currency {
+  return Number.isFinite(total) && total > 100_000 ? "LBP" : fallback;
+}
+
+export function updateLineTotal(
+  bill: Bill,
+  itemId: string,
+  value: string,
+): Bill {
+  const amounts = bill.items.map((item) =>
+    item.id === itemId
+      ? Math.max(0, Number(value) || 0)
+      : item.amount / 10 ** currencyDigits(bill.currency),
+  );
+  const currency = inferAmountCurrency(
+    amounts.reduce((sum, amount) => sum + amount, 0),
+    bill.currency,
+  );
+  return {
+    ...bill,
+    currency,
+    // Reinterpret the entered numbers as lira; this is not an FX conversion.
+    items: bill.items.map((item, index) => ({
+      ...item,
+      amount: toMinor(String(amounts[index]), currency),
+    })),
+  };
+}
+
 // Largest remainder allocation keeps the sum exact, including a one-cent split.
 export function allocate(amount: number, weights: number[]): number[] {
   const total = weights.reduce((a, b) => a + b, 0);

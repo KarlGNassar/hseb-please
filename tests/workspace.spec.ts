@@ -1,6 +1,74 @@
 import { test, expect } from "@playwright/test";
 import { demoBill } from "../src/lib/bill";
 
+test("phone forms stay readable and within the viewport while adding people", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "Phone input sizing and layout regression");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Try a sample receipt" }).click();
+  await page.getByRole("button", { name: "Add your people" }).click();
+  for (const width of [320, 390, 844]) {
+    await page.setViewportSize({ width, height: width === 844 ? 390 : 844 });
+    const name = page.getByLabel("New person’s name");
+    await name.fill(`Friend ${width}`);
+    await expect(name).toBeFocused();
+    await expect(name).toHaveCSS("outline-style", "none");
+    const smallControls = await page
+      .locator("input:visible, select:visible, textarea:visible")
+      .evaluateAll((controls) =>
+        controls
+          .filter(
+            (control) => parseFloat(getComputedStyle(control).fontSize) < 16,
+          )
+          .map((control) => control.outerHTML),
+      );
+    expect(smallControls).toEqual([]);
+    const add = page.getByRole("button", { name: "Add person", exact: true });
+    await add.focus();
+    await expect(add).toHaveCSS("outline-style", "none");
+    await add.click();
+    await expect(
+      page.getByRole("button", { name: `Remove Friend ${width}`, exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "/tmp/hseb-mobile-forms.png", fullPage: true });
+});
+
+test("large manual prices automatically become LBP and remain correct after reload", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add items manually" }).click();
+  await page.getByLabel("Item 1 name").fill("Coffee");
+  const amount = page.getByLabel("Line total for Coffee");
+  await amount.fill("225000");
+  await amount.blur();
+  await expect(page.getByLabel("Currency", { exact: true })).toHaveValue("LBP");
+  await expect(amount).toHaveValue("225000");
+  await page.getByRole("button", { name: "Add your people" }).click();
+  await page.getByLabel("New person’s name").fill("Maya");
+  await page.getByRole("button", { name: "Add person", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Split equally", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Let’s split it" }).click();
+  await expect(page.locator(".person-total")).toHaveText([
+    /LBP\s*112,500/,
+    /LBP\s*112,500/,
+  ]);
+  await page.reload();
+  await expect(page.getByLabel("Currency", { exact: true })).toHaveValue("LBP");
+  await expect(page.getByLabel("Line total for Coffee")).toHaveValue("225000");
+});
+
 test("free release supports any restaurant, group edits, equal splitting, and saved drafts", async ({
   page,
 }) => {

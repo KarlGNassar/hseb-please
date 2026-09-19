@@ -50,19 +50,16 @@ a {
 button {
   color: inherit;
 }
-button,
-input,
-select,
-textarea {
-  outline-offset: 4px;
+button:focus,
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
 }
-button:focus-visible,
 a:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--accent);
+  outline-offset: 4px;
 }
 button {
   transition:
@@ -1290,6 +1287,13 @@ h1 > span {
   text-align: center;
   font-size: 10px;
 }
+.item-quantity,
+.item-amount {
+  display: contents;
+}
+.mobile-field-label {
+  display: none;
+}
 .assignments {
   display: flex;
   gap: 5px;
@@ -2096,16 +2100,36 @@ body:has(.confirmation-dialog[open]) {
   .restaurant-status {
     font-size: 7px;
   }
-  .item-table-head,
+  .item-table-head {
+    display: none;
+  }
   .item-row {
-    grid-template-columns: minmax(0, 1fr) 30px 68px 22px;
-    gap: 7px;
+    grid-template-columns: 54px minmax(0, 1fr) 44px;
+    gap: 10px;
+    align-items: end;
   }
   .item-name {
+    grid-column: 1 / -1;
     gap: 5px;
   }
-  .item-name input {
+  .item-quantity,
+  .item-amount {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .mobile-field-label {
+    display: block;
     font-size: 11px;
+    color: var(--muted);
+  }
+  .item-row .delete-item,
+  .quantity-input,
+  .amount-input {
+    min-height: 44px;
+  }
+  .item-row .delete-item {
+    width: 44px;
   }
   .item-index {
     font-size: 7px;
@@ -2123,7 +2147,27 @@ body:has(.confirmation-dialog[open]) {
     font-size: 8px;
   }
   .person-pill input {
-    width: 66px;
+    width: 90px;
+  }
+}
+/* Keep phone and tablet form controls large enough to prevent focus zoom. */
+@media (max-width: 760px), (pointer: coarse) {
+  .app-shell input,
+  .app-shell select,
+  .app-shell textarea {
+    font-size: 16px;
+  }
+  .add-person > input,
+  .add-person > button,
+  .person-pill input {
+    min-height: 44px;
+  }
+  .receipt-options,
+  .receipt-options label {
+    flex-wrap: wrap;
+  }
+  .receipt-options select {
+    max-width: 100%;
   }
 }
 @media (prefers-reduced-motion: reduce) {

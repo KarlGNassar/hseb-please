@@ -1,5 +1,10 @@
 import type { Line, Page, Word } from "tesseract.js";
-import { toMinor, type BillItem, type Currency } from "./bill";
+import {
+  inferAmountCurrency,
+  toMinor,
+  type BillItem,
+  type Currency,
+} from "./bill";
 
 export type ParsedReceipt = {
   items: BillItem[];
@@ -150,6 +155,8 @@ export function parseReceipt(
     )
       currency = closest.currency!;
   }
+  // Only item prices count: converted totals, phone numbers and check IDs don't.
+  currency = inferAmountCurrency(rawSum, currency);
   const subtotal = totals.find(
     (total) =>
       total.subtotal && (!total.currency || total.currency === currency),

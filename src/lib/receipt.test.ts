@@ -76,6 +76,32 @@ test("dual totals do not imply LBP when the item amounts are USD", () => {
   assert.equal(receipt.items[0].amount, 300);
 });
 
+test("unlabeled receipt amounts above 100,000 are lira before minor-unit conversion", () => {
+  for (const text of [
+    "Coffee 100001",
+    "Coffee 60,000\nTea 60,000",
+    "قهوة ١٢٥٬٠٠٠",
+    "Coffee 125000\nTOTAL $: 1.39",
+  ]) {
+    const receipt = parseReceipt(text, "USD");
+    assert.equal(receipt.currency, "LBP");
+    assert.ok(receipt.items[0].amount >= 60000);
+    assert.ok(receipt.items[0].amount <= 125000);
+  }
+  for (const amount of [99999, 100000]) {
+    const receipt = parseReceipt(`Coffee ${amount}`, "USD");
+    assert.equal(receipt.currency, "USD");
+    assert.equal(receipt.items[0].amount, amount * 100);
+  }
+  const dollars = parseReceipt(
+    "Phone 12345678\nCheck 100001\nCoffee 3.00",
+    "USD",
+  );
+  assert.equal(dollars.currency, "USD");
+  assert.equal(dollars.items[0].amount, 300);
+  assert.equal(parseReceipt("Coffee LBP 90000", "USD").currency, "LBP");
+});
+
 test("RTL price-first OCR and bidirectional marks preserve quantities", () => {
   const receipt = parseReceipt(
     "Cafe\n------\n١٢٦٠٠٠٠ ‏صحن بيض مع قاورما‎٢\n------\nTOTAL LL: 1,260,000",
