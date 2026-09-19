@@ -50,7 +50,11 @@ import {
   type Currency,
   type splitBill,
 } from "@/lib/bill";
-import { parseReceipt } from "@/lib/receipt";
+import { parseReceipt, readReceiptLayout } from "@/lib/receipt";
+import {
+  findReceiptSeparators,
+  prepareReceiptImage,
+} from "@/lib/receipt-image";
 import { canSplit, type Restaurant } from "@/lib/restaurants";
 import { useConfirmation } from "@/components/confirmation-dialog";
 import { useScrollNavigation } from "@/components/use-scroll-navigation";
@@ -101,7 +105,9 @@ export function BillWorkspace({
   const [error, setError] = useState("");
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [language, setLanguage] = useState("eng");
+  const [language, setLanguage] = useState("eng+ara");
+  const [scanLabel, setScanLabel] = useState("Reading your receipt");
+  const [scanReview, setScanReview] = useState("");
   const [preview, setPreview] = useState("");
   const [rawText, setRawText] = useState("");
   const [detectedSubtotal, setDetectedSubtotal] = useState<number | null>(null);
@@ -328,6 +334,7 @@ export function BillWorkspace({
       goToStage(0);
       setPreview("");
       setRawText("");
+      setScanReview("");
       setDetectedSubtotal(null);
     }
     setRestaurant(next);
@@ -354,13 +361,14 @@ export function BillWorkspace({
     setSplit(null);
     setPreview("");
     setRawText("");
+    setScanReview("");
     setDetectedSubtotal(null);
     setError("");
     setNotice("");
     setScanning(false);
   }
 
-  function applyReceipt(text: string) {
+  function applyReceipt(text: string, restaurantHint?: string | null) {
     const parsed = parseReceipt(text, bill.currency);
     setDetectedSubtotal(parsed.detectedSubtotal);
     if (!parsed.items.length) {
@@ -371,8 +379,11 @@ export function BillWorkspace({
     }
     updateBill((previous) => ({
       ...previous,
+      currency: parsed.currency,
       items: parsed.items,
     }));
+    const detectedName = restaurantHint || parsed.restaurantName;
+    if (!requireRestaurant && detectedName) setRestaurantName(detectedName);
     setNotice(
       "Receipt scanned. Check the item names and line totals before continuing.",
     );
@@ -408,12 +419,20 @@ export function BillWorkspace({
     setError("");
     setNotice("");
     setScanning(true);
+    setScanReview("");
+    setScanLabel("Straightening your receipt");
     setProgress(0);
     setPreview(URL.createObjectURL(file));
     const generation = ++generationRef.current;
     let worker: Worker | null = null;
     try {
-      const { createWorker } = await import("tesseract.js");
+      const [prepared, { createWorker, PSM }] = await Promise.all([
+        prepareReceiptImage(file),
+        import("tesseract.js"),
+      ]);
+      if (generation !== generationRef.current) return;
+      const separators = findReceiptSeparators(prepared);
+      setScanLabel("Reading your receipt");
       worker = await createWorker(language, 1, {
         logger: (message) => {
           if (
@@ -425,10 +444,48 @@ export function BillWorkspace({
       });
       if (generation !== generationRef.current) return;
       workerRef.current = worker;
-      const result = await worker.recognize(file);
+      await worker.setParameters({
+        tessedit_pageseg_mode: PSM.AUTO,
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+      });
+      const result = await worker.recognize(
+        prepared,
+        { rotateAuto: true },
+        { text: true, blocks: true },
+      );
       if (generation !== generationRef.current) return;
-      setRawText(result.data.text);
-      applyReceipt(result.data.text);
+      let layout = readReceiptLayout(result.data, separators);
+      if (
+        language.includes("ara") &&
+        layout.uncertainNames &&
+        /[\u0620-\u064a]/.test(layout.text)
+      ) {
+        setScanLabel("Checking Arabic item names");
+        setProgress(0);
+        // A second language-specific pass can clarify names. Prices and quantities
+        // always come from the original multilingual pass, never this retry.
+        await worker.reinitialize("ara");
+        await worker.setParameters({
+          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+          preserve_interword_spaces: "1",
+          user_defined_dpi: "300",
+        });
+        const arabicResult = await worker.recognize(
+          prepared,
+          { rotateAuto: true },
+          { text: true, blocks: true },
+        );
+        if (generation !== generationRef.current) return;
+        layout = readReceiptLayout(result.data, separators, arabicResult.data);
+      }
+      setScanReview(
+        layout.uncertainNames
+          ? "A few item names were unclear. Please check their spelling against your receipt before continuing."
+          : "",
+      );
+      setRawText(layout.text);
+      applyReceipt(layout.text, layout.restaurantName);
     } catch {
       if (generation === generationRef.current)
         setError(
@@ -802,7 +859,7 @@ export function BillWorkspace({
                     </div>
                     <h3>
                       {scanning
-                        ? `Reading your receipt… ${progress}%`
+                        ? `${scanLabel}… ${progress}%`
                         : "A photo is worth a thousand calculations."}
                     </h3>
                     <p>
@@ -905,6 +962,7 @@ export function BillWorkspace({
                         setDetectedSubtotal(null);
                         setPreview("");
                         setRawText("");
+                        setScanReview("");
                         setNotice(
                           "Sample receipt loaded. These are example items, not your restaurant’s menu.",
                         );
@@ -1071,6 +1129,12 @@ export function BillWorkspace({
                       Check for missing items or discounts.
                     </div>
                   )}
+                  {scanReview && (
+                    <div className="message warning" role="status">
+                      <CircleHelp size={16} />
+                      <span>{scanReview}</span>
+                    </div>
+                  )}
                   <div className="item-table-head">
                     <span>ITEM</span>
                     <span>QTY</span>
@@ -1094,6 +1158,7 @@ export function BillWorkspace({
                             </span>
                             <input
                               aria-label={`Item ${index + 1} name`}
+                              dir="auto"
                               maxLength={120}
                               value={item.name}
                               onChange={(e) =>
@@ -1253,6 +1318,7 @@ export function BillWorkspace({
                       <summary>Review scanned text</summary>
                       <textarea
                         aria-label="Scanned receipt text"
+                        dir="auto"
                         value={rawText}
                         onChange={(e) => setRawText(e.target.value)}
                       />

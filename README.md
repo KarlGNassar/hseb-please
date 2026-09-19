@@ -11,7 +11,7 @@ pnpm dev
 
 Open http://localhost:3000. Node.js 20.9+ is required; Node.js 24 LTS is recommended. **No Supabase credentials are required for the initial free release.**
 
-Customers can upload an image or use a phone camera, review OCR results, add/remove people, assign shared items or split equally, and copy/download the result. Tax, tips, and service charges are excluded from the split. English and English + Arabic OCR are available. Only USD and LBP are supported; changing currency relabels amounts rather than converting exchange rates. Currency changes and replacing or clearing an existing bill use in-app confirmation modals.
+Customers can upload an image or use a phone camera, review OCR results, add/remove people, assign shared items or split equally, and copy/download the result. Tax, tips, and service charges are excluded from the split. English + Arabic is the default OCR language; English-only is also available. Only USD and LBP are supported; changing currency manually relabels amounts rather than converting exchange rates. Currency changes and replacing or clearing an existing bill use in-app confirmation modals.
 
 The first release works for **every customer at every restaurant**. There are no customer accounts, fees, payment collection, registration requests, notifications, or restaurant outreach.
 
@@ -70,6 +70,8 @@ The migration contains no pre-approved example restaurants. Future restaurant bi
 ## Data and calculations
 
 - Tesseract runs in a browser worker. Receipt images stay on the device and are not sent to Next.js or Supabase. Its worker, WebAssembly runtime, and language data download from upstream CDNs; first use requires internet access.
+- Photos are cropped to detected receipt paper and straightened locally before OCR. The largest heading above the item table supplies the suggested restaurant name. Dashed separators identify the item region; word positions reconstruct quantities, Arabic names, and prices when OCR reads columns out of order. Uncertain Arabic names get a second language-specific pass, without replacing the original prices.
+- On dual-currency receipts, item amounts are compared with labeled LBP/USD totals to identify their currency. The USD equivalent is never added as an item. A subtotal (or a same-currency total without separate charges) provides a cross-check; amounts are never silently adjusted to match it.
 - A single current bill draft is saved in `localStorage`, including item names, amounts, participant names, and the selected restaurant. Receipt images and raw OCR text are not persisted. Clearing browser data removes the draft. There is no cross-device sync.
 - The final bill data is sent to the Next.js split endpoint for calculation and eligibility checks. It is not stored in a database. All persistent server-side data uses Supabase.
 - Values are integer minor currency units. Shared items use largest-remainder allocation with exact integer arithmetic. Equal mode allocates the grand total evenly, with a maximum difference of one minor unit.
@@ -87,6 +89,8 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 # Optional live OCR check (downloads Tesseract assets):
 TEST_LIVE_OCR=1 pnpm test:e2e tests/ocr.spec.ts --project=desktop
+# Optional regression check using the locally provided Koukh El Sabaya photo:
+TEST_RECEIPT_IMAGE="/path/to/receipt.jpeg" pnpm test:e2e tests/ocr.spec.ts --project=desktop
 ```
 
 Browser tests use the production build and run free/restricted modes on ports 3100/3101. They verify mobile/desktop flows, persistence, exact totals, input validation, and fail-closed access enforcement without a Supabase connection. Live Supabase migration/RLS verification requires your project. OCR accuracy also depends on the actual receipt image and language.
@@ -99,6 +103,7 @@ TypeScript 6 and ESLint 9 are pinned to the versions supported by the current Ne
 - `src/components/bill-workspace.tsx`: interactive scan/review/assignment workflow.
 - `src/lib/bill.ts`: validated bill model and deterministic calculations.
 - `src/lib/receipt.ts`: OCR text parsing.
+- `src/lib/receipt-image.ts`: local receipt boundary detection and perspective correction.
 - `src/lib/access-policy.ts`: server-only release toggle.
 - `src/lib/supabase.ts`: server-only Supabase client using the public key and RLS.
 - `supabase/migrations`: database schema and eligibility function.

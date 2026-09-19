@@ -9,6 +9,7 @@ test("real Tesseract worker reads an uploaded receipt image", async ({
   );
   test.setTimeout(120_000);
   await page.goto("/");
+  await expect(page.locator(".receipt-options select")).toHaveValue("eng+ara");
   const receipt = await page.evaluate(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 1000;
@@ -42,4 +43,46 @@ test("real Tesseract worker reads an uploaded receipt image", async ({
   await expect(page.getByLabel("Item 1 name")).toHaveValue("Hummus");
   await expect(page.getByLabel("Item 2 name")).toHaveValue("Mint Lemonade");
   await expect(page.locator(".grand-total strong")).toHaveText("$14.50");
+});
+
+test("photographed Arabic receipt preserves the item table and LBP prices", async ({
+  page,
+}, testInfo) => {
+  const photo = process.env.TEST_RECEIPT_IMAGE;
+  test.skip(
+    !photo || testInfo.project.name !== "desktop",
+    "Supply a local receipt photo using TEST_RECEIPT_IMAGE.",
+  );
+  test.setTimeout(180_000);
+  await page.goto("/");
+  await expect(page.locator(".receipt-options select")).toHaveValue("eng+ara");
+  await page
+    .getByLabel("Upload receipt image", { exact: true })
+    .setInputFiles(photo!);
+  await expect(page.locator(".item-block")).toHaveCount(12, {
+    timeout: 150_000,
+  });
+  await expect(page.getByLabel("Currency", { exact: true })).toHaveValue("LBP");
+  await expect(
+    page.getByLabel("ANY RESTAURANT. EVERYONE WELCOME."),
+  ).toHaveValue("Koukh El Sabaya");
+  await expect(page.locator(".grand-total strong")).toHaveText(/7,020,000/);
+  await expect(page.locator(".item-name input").first()).toHaveValue(/نسكاف/);
+  expect(
+    await page
+      .locator(".amount-input")
+      .evaluateAll((inputs) =>
+        inputs.map((input) => Number((input as HTMLInputElement).value)),
+      ),
+  ).toEqual([
+    225000, 225000, 135000, 135000, 135000, 90000, 450000, 315000, 540000,
+    1260000, 810000, 2700000,
+  ]);
+  expect(
+    await page
+      .locator(".quantity-input")
+      .evaluateAll((inputs) =>
+        inputs.map((input) => Number((input as HTMLInputElement).value)),
+      ),
+  ).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 4]);
 });
