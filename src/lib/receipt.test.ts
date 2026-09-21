@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseReceipt, readReceiptLayout } from "./receipt";
-import type { Page, Word } from "tesseract.js";
+import type { OcrWord } from "./receipt";
 
 test("parses line totals without multiplying quantities or including payment totals", () => {
   const receipt = parseReceipt(
@@ -118,7 +118,7 @@ test("image word positions rejoin separate columns and preserve RTL name order",
       text,
       confidence: 95,
       bbox: { x0: x, x1: x + width, y0: y, y1: y + height },
-    }) as Word;
+    }) as OcrWord;
   const words = [
     word("Koukh El Sabaya", 60, 10, 200, 40),
     word("Mtein", 80, 60),
@@ -130,8 +130,8 @@ test("image word positions rejoin separate columns and preserve RTL name order",
   ];
   const page = {
     text: "garbled",
-    blocks: words.map((w) => ({ paragraphs: [{ lines: [{ words: [w] }] }] })),
-  } as unknown as Pick<Page, "text" | "blocks">;
+    words,
+  };
   const layout = readReceiptLayout(page, [100, 200]);
   assert.equal(layout.restaurantName, "Koukh El Sabaya");
   const receipt = parseReceipt(layout.text, "LBP");

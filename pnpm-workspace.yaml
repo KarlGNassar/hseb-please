@@ -1,0 +1,2 @@
+patchedDependencies:
+  ocr-space-api-wrapper@2.4.9: patches/ocr-space-api-wrapper@2.4.9.patch

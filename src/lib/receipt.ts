@@ -1,4 +1,3 @@
-import type { Line, Page, Word } from "tesseract.js";
 import {
   inferAmountCurrency,
   toMinor,
@@ -13,8 +12,10 @@ export type ParsedReceipt = {
   currency: Currency;
 };
 
-type OcrPage = Pick<Page, "text" | "blocks">;
-type ReceiptRow = Pick<Line, "words" | "text" | "bbox">;
+type Box = { x0: number; x1: number; y0: number; y1: number };
+export type OcrWord = { text: string; bbox: Box; confidence?: number };
+export type OcrPage = { text: string; words: OcrWord[] };
+type ReceiptRow = { text: string; words: OcrWord[]; bbox: Box };
 const letters = /[a-z\u0620-\u064a]/i;
 const arabic = /[\u0620-\u064a]/;
 const metadata =
@@ -87,16 +88,114 @@ function readItem(line: string): RawItem | null {
   const value = price(match[2]);
   if (value === null || !letters.test(name)) return null;
   const quantityMatch = name.match(/^(\d{1,3})\s*(?:[x×]\s*|\s+)(.+)$/i);
-  const quantity = quantityMatch ? Math.max(1, Number(quantityMatch[1])) : 1;
+  const trailingQuantity =
+    !quantityMatch && arabic.test(name)
+      ? name.match(/^(.+?)\s+(\d{1,3})$/)
+      : null;
+  const quantity = quantityMatch
+    ? Math.max(1, Number(quantityMatch[1]))
+    : trailingQuantity
+      ? Math.max(1, Number(trailingQuantity[2]))
+      : 1;
   if (quantityMatch) name = quantityMatch[2].trim();
+  else if (trailingQuantity) name = trailingQuantity[1].trim();
   return { name, quantity, value, currency: unit };
+}
+
+/** Engine 3 returns Markdown tables; preserve columns before parsing amounts. */
+export function normalizeReceiptText(text: string): string {
+  let columns: string[] = [];
+  const lines = text.split(/\r?\n/).map((raw) => {
+    const line = clean(raw)
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/\*\*|__/g, "");
+    if (!line.includes("|")) {
+      columns = [];
+      return line;
+    }
+    const cells = line
+      .replace(/^\||\|$/g, "")
+      .split("|")
+      .map((cell) => cell.trim());
+    if (cells.every((cell) => /^:?-{2,}:?$/.test(cell))) return "";
+    const nameIndex = cells.findIndex((cell) =>
+      /^(?:item|description|name|الصنف|البيان|الوصف)(?:\s+name)?$/i.test(cell),
+    );
+    if (nameIndex >= 0) {
+      columns = cells;
+      return "";
+    }
+    if (
+      totalLabel.test(cells.join(" ")) ||
+      metadata.test(cells.join(" ")) ||
+      charges.test(cells.join(" "))
+    )
+      return cells.filter(Boolean).join(" ");
+    const quantityIndex = columns.findIndex((cell) =>
+      /^(?:qty\.?|quantity|الكمية|عدد)$/i.test(cell),
+    );
+    const totalIndex = columns.findIndex((cell) =>
+      /^(?:amount|total|line total|المبلغ|الإجمالي|السعر الإجمالي)$/i.test(
+        cell,
+      ),
+    );
+    const descriptionIndex = columns.findIndex((cell) =>
+      /^(?:item|description|name|الصنف|البيان|الوصف)(?:\s+name)?$/i.test(cell),
+    );
+    if (descriptionIndex >= 0 && totalIndex >= 0) {
+      return `${quantityIndex >= 0 ? cells[quantityIndex] : "1"} ${cells[descriptionIndex]} ${cells[totalIndex]}`;
+    }
+    return cells.filter(Boolean).join(" ");
+  });
+  // Some Engine 3 layouts emit the description/quantity column followed by
+  // the amount column. Join only complete, equally sized consecutive columns.
+  const columnItem = (line: string) => {
+    if (metadata.test(line) || charges.test(line) || totalLabel.test(line))
+      return null;
+    const leading = line.match(/^(\d{1,3})\s+(.+)$/);
+    const trailing = line.match(/^(.+?)\s+(\d{1,3})$/);
+    const name = leading?.[2] ?? trailing?.[1];
+    const quantity = Number(leading?.[1] ?? trailing?.[2]);
+    return name && letters.test(name) && quantity >= 1
+      ? { name, quantity }
+      : null;
+  };
+  const output: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const descriptions: { name: string; quantity: number }[] = [];
+    let end = i;
+    for (; end < lines.length; end++) {
+      const item = columnItem(lines[end]);
+      if (!item) break;
+      descriptions.push(item);
+    }
+    const amounts: string[] = [];
+    for (let j = end; j < lines.length && price(lines[j]) !== null; j++)
+      amounts.push(lines[j]);
+    if (descriptions.length >= 2 && descriptions.length === amounts.length) {
+      output.push(
+        ...descriptions.map(
+          (item, index) => `${item.quantity} ${item.name} ${amounts[index]}`,
+        ),
+      );
+      i = end + amounts.length - 1;
+    } else if (descriptions.length > 1) {
+      // Do not retry a shorter suffix of a mismatched column and shift prices.
+      output.push(...lines.slice(i, end));
+      i = end - 1;
+    } else output.push(lines[i]);
+  }
+  return output.join("\n");
 }
 
 export function parseReceipt(
   text: string,
   fallbackCurrency: Currency,
 ): ParsedReceipt {
-  const lines = text.split(/\r?\n/).map(clean).filter(Boolean);
+  const lines = normalizeReceiptText(text)
+    .split(/\r?\n/)
+    .map(clean)
+    .filter(Boolean);
   const dividers = lines
     .map((line, index) => (separator.test(line) ? index : -1))
     .filter((index) => index >= 0);
@@ -187,18 +286,13 @@ export function parseReceipt(
 
 function pageRows(page: OcrPage): ReceiptRow[] {
   // Rejoin price/name columns by vertical position even if OCR returns separate blocks.
-  const words =
-    page.blocks?.flatMap((block) =>
-      block.paragraphs.flatMap((paragraph) =>
-        paragraph.lines.flatMap((line) => line.words),
-      ),
-    ) ?? [];
+  const words = page.words;
   const heights = words
     .map((word) => word.bbox.y1 - word.bbox.y0)
     .filter((h) => h > 3)
     .sort((a, b) => a - b);
   const tolerance = (heights[Math.floor(heights.length / 2)] || 20) * 0.55;
-  const rows: { center: number; words: Word[] }[] = [];
+  const rows: { center: number; words: OcrWord[] }[] = [];
   for (const word of [...words].sort(
     (a, b) => a.bbox.y0 + a.bbox.y1 - (b.bbox.y0 + b.bbox.y1),
   )) {
@@ -252,7 +346,9 @@ function rowItem(row: ReceiptRow) {
     name,
     quantity: quantity ? clean(quantity.text) : "1",
     amount: clean(right.text),
-    uncertain: nameWords.some((word) => word.confidence < 70),
+    uncertain: nameWords.some(
+      (word) => word.confidence !== undefined && word.confidence < 70,
+    ),
     center: (row.bbox.y0 + row.bbox.y1) / 2,
   };
 }

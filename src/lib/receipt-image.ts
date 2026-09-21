@@ -1,45 +1,29 @@
 type Point = { x: number; y: number };
 export type ReceiptCorners = [Point, Point, Point, Point];
 
-/** Detect long dashed rules even when Tesseract omits them from its text output. */
-export function findReceiptSeparators(canvas: HTMLCanvasElement): number[] {
-  const thumbnail = document.createElement("canvas");
-  thumbnail.width = Math.min(360, canvas.width);
-  thumbnail.height = Math.round(
-    (canvas.height * thumbnail.width) / canvas.width,
-  );
-  const context = thumbnail.getContext("2d", { willReadFrequently: true })!;
-  context.drawImage(canvas, 0, 0, thumbnail.width, thumbnail.height);
-  const { data } = context.getImageData(
-    0,
-    0,
-    thumbnail.width,
-    thumbnail.height,
-  );
-  const margin = Math.round(thumbnail.width * 0.05);
-  const bands: { start: number; end: number }[] = [];
-  for (let y = 3; y < thumbnail.height - 3; y++) {
-    let dark = 0;
-    for (let x = margin; x < thumbnail.width - margin; x++) {
-      for (let dy = -2; dy <= 2; dy++) {
-        if (data[((y + dy) * thumbnail.width + x) * 4] < 110) {
-          dark++;
-          break;
-        }
-      }
-    }
-    if (dark / (thumbnail.width - margin * 2) > 0.55) {
-      const last = bands[bands.length - 1];
-      if (last && last.end === y - 1) last.end = y;
-      else bands.push({ start: y, end: y });
+/** Keep uploads below the OCR.Space free plan's 1 MB image limit. */
+export function encodeReceiptImage(canvas: HTMLCanvasElement): string {
+  const target = document.createElement("canvas");
+  let size = Math.min(1, 2200 / Math.max(canvas.width, canvas.height));
+  for (let attempt = 0; attempt < 5; attempt++, size *= 0.8) {
+    target.width = Math.max(1, Math.round(canvas.width * size));
+    target.height = Math.max(1, Math.round(canvas.height * size));
+    const context = target.getContext("2d")!;
+    context.fillStyle = "white";
+    context.fillRect(0, 0, target.width, target.height);
+    context.drawImage(canvas, 0, 0, target.width, target.height);
+    for (const quality of [0.9, 0.8, 0.7]) {
+      const image = target.toDataURL("image/jpeg", quality);
+      if (
+        image.startsWith("data:image/jpeg;base64,") &&
+        image.length <= 1_200_000
+      )
+        return image;
     }
   }
-  return bands
-    .filter((band) => band.end - band.start < thumbnail.height * 0.025)
-    .map(
-      (band) =>
-        (((band.start + band.end) / 2) * canvas.height) / thumbnail.height,
-    );
+  throw new Error(
+    "This photo is too large to scan. Try cropping to just the receipt.",
+  );
 }
 
 /** Find the largest connected region of light, low-saturation receipt paper. */

@@ -1,19 +1,31 @@
 # Hseb Please
 
-Receipt scanning and fair bill splitting, with a little Lebanese soul. Built with Next.js 16 App Router, React, TypeScript, Tesseract.js, and Supabase. Uses pnpm.
+Receipt scanning and fair bill splitting, with a little Lebanese soul. Built with Next.js 16 App Router, React, TypeScript, OCR.Space, and Supabase. Uses pnpm.
 
 ## Run the first release
 
 ```sh
 pnpm install --frozen-lockfile
+cp .env.example .env.local
+# Set OCR_SPACE_API_KEY in .env.local before scanning receipts.
 pnpm dev
 ```
 
 Open http://localhost:3000. Node.js 20.9+ is required; Node.js 24 LTS is recommended. **No Supabase credentials are required for the initial free release.**
 
-Customers can upload an image or use a phone camera, review OCR results, add/remove people, assign shared items or split equally, and copy/download the result. Tax, tips, and service charges are excluded from the split. English + Arabic is the default OCR language; English-only is also available. Only USD and LBP are supported; changing currency manually relabels amounts rather than converting exchange rates. Currency changes and replacing or clearing an existing bill use in-app confirmation modals.
+Customers can upload an image or use a phone camera, review OCR results, add/remove people, assign shared items or split equally, and copy/download the result. Tax, tips, and service charges are excluded from the split. English + Arabic is the default OCR mode (Engine 3 with automatic language detection); English-only uses Engine 2. Only USD and LBP are supported; changing currency manually relabels amounts rather than converting exchange rates. Currency changes and replacing or clearing an existing bill use in-app confirmation modals.
 
 The first release works for **every customer at every restaurant**. There are no customer accounts, fees, payment collection, registration requests, notifications, or restaurant outreach.
+
+## OCR.Space setup and Vercel deployment
+
+Add `OCR_SPACE_API_KEY` to `.env.local` and the Vercel environment for each deployment, then redeploy. This is a **server-only** secret: do not prefix it with `NEXT_PUBLIC_`. Manual entry and sample bills work without a key. Supabase configuration is unchanged.
+
+The default Arabic/English mode uses `OCREngine=3`, `language=auto`, and table detection. Engine 3 has its own free quota (currently 2,500 conversions/month); English-only mode uses Engine 2 (25,000/month). The free plan has a 1 MB file limit and a 500-request/day/IP limit. Check [current provider limits](https://ocr.space/ocrapi) before launch. The app accepts original phone photos up to 12 MB and compresses them locally before uploading.
+
+Requests time out after 50 seconds. Failed or partial scans preserve existing bill items and offer manual entry. The endpoint validates image data, rejects URLs/file paths, checks restaurant eligibility when gating is enabled, and applies a best-effort five-scans/minute/IP limit per server instance. This is not a distributed quota; provider limits still apply across Vercel instances.
+
+The pnpm patch in `patches/` removes the wrapper's raw error logging, which could otherwise expose API keys and image data in server logs. Commit `pnpm-workspace.yaml`, the patch, and the lockfile together.
 
 ## Restaurant access toggle
 
@@ -69,8 +81,8 @@ The migration contains no pre-approved example restaurants. Future restaurant bi
 
 ## Data and calculations
 
-- Tesseract runs in a browser worker. Receipt images stay on the device and are not sent to Next.js or Supabase. Its worker, WebAssembly runtime, and language data download from upstream CDNs; first use requires internet access.
-- Photos are cropped to detected receipt paper and straightened locally before OCR. The largest heading above the item table supplies the suggested restaurant name. Dashed separators identify the item region; word positions reconstruct quantities, Arabic names, and prices when OCR reads columns out of order. Uncertain Arabic names get a second language-specific pass, without replacing the original prices.
+- The browser prepares a JPEG under 900 KB and sends it to `/api/ocr`. The Next.js server calls OCR.Space with a private API key. Receipt images are processed in memory, are not stored by this app or Supabase, and are transmitted to OCR.Space. See the [provider privacy policy](https://ocr.space/privacypolicy). Internet access is required.
+- Photos are cropped and straightened locally before OCR. Engine 3 reads mixed Arabic/English text and tables; Markdown table output is normalized into item rows. Engine 2 word positions help reconstruct English receipt rows. Restaurant headings, separator sections, and Arabic quantity placement are handled by the receipt parser.
 - On dual-currency receipts, item amounts are compared with labeled LBP/USD totals to identify their currency. The USD equivalent is never added as an item. A subtotal (or a same-currency total without separate charges) provides a cross-check; amounts are never silently adjusted to match it.
 - A single current bill draft is saved in `localStorage`, including item names, amounts, participant names, and the selected restaurant. Receipt images and raw OCR text are not persisted. Clearing browser data removes the draft. There is no cross-device sync.
 - The final bill data is sent to the Next.js split endpoint for calculation and eligibility checks. It is not stored in a database. All persistent server-side data uses Supabase.
@@ -87,7 +99,7 @@ pnpm test
 pnpm build
 pnpm exec playwright install chromium
 pnpm test:e2e
-# Optional live OCR check (downloads Tesseract assets):
+# Optional live OCR check (uses your OCR.Space key and quota):
 TEST_LIVE_OCR=1 pnpm test:e2e tests/ocr.spec.ts --project=desktop
 # Optional regression check using the locally provided Koukh El Sabaya photo:
 TEST_RECEIPT_IMAGE="/path/to/receipt.jpeg" pnpm test:e2e tests/ocr.spec.ts --project=desktop
@@ -108,4 +120,4 @@ TypeScript 6 and ESLint 9 are pinned to the versions supported by the current Ne
 - `src/lib/supabase.ts`: server-only Supabase client using the public key and RLS.
 - `supabase/migrations`: database schema and eligibility function.
 
-Design references: [Next.js App Router](https://nextjs.org/docs/app/getting-started), [Tesseract.js](https://github.com/naptha/tesseract.js), [Supabase API keys](https://supabase.com/docs/guides/api/api-keys), and [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
+Design references: [Next.js App Router](https://nextjs.org/docs/app/getting-started), [OCR.Space wrapper](https://github.com/DavideViolante/ocr-space-api-wrapper), [Supabase API keys](https://supabase.com/docs/guides/api/api-keys), and [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).

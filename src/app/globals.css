@@ -1103,12 +1103,22 @@ h1 > span {
   background: #e7e3d7;
   max-width: 260px;
   margin: 25px auto;
+  overflow: hidden;
 }
 .scan-progress > div {
   height: 100%;
   background: var(--accent);
   border-radius: 4px;
   transition: width 0.3s;
+}
+.scan-progress-indeterminate {
+  width: 40%;
+  animation: scan-progress 1.4s ease-in-out infinite alternate;
+}
+@keyframes scan-progress {
+  to {
+    transform: translateX(150%);
+  }
 }
 .spin {
   animation: spin 1s linear infinite;

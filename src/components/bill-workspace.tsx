@@ -50,17 +50,13 @@ import {
   type Currency,
   type splitBill,
 } from "@/lib/bill";
-import { parseReceipt, readReceiptLayout } from "@/lib/receipt";
-import {
-  findReceiptSeparators,
-  prepareReceiptImage,
-} from "@/lib/receipt-image";
+import { parseReceipt } from "@/lib/receipt";
+import { encodeReceiptImage, prepareReceiptImage } from "@/lib/receipt-image";
 import { canSplit, type Restaurant } from "@/lib/restaurants";
 import { useConfirmation } from "@/components/confirmation-dialog";
 import { useScrollNavigation } from "@/components/use-scroll-navigation";
 
 type Split = ReturnType<typeof splitBill>;
-type Worker = Awaited<ReturnType<typeof import("tesseract.js").createWorker>>;
 const STORAGE_KEY = "hseb-please:bill:v1";
 const COLORS = ["peach", "sage", "lavender", "blue", "yellow"];
 
@@ -104,10 +100,8 @@ export function BillWorkspace({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [scanning, setScanning] = useState(false);
-  const [progress, setProgress] = useState(0);
   const [language, setLanguage] = useState("eng+ara");
   const [scanLabel, setScanLabel] = useState("Reading your receipt");
-  const [scanReview, setScanReview] = useState("");
   const [preview, setPreview] = useState("");
   const [rawText, setRawText] = useState("");
   const [detectedSubtotal, setDetectedSubtotal] = useState<number | null>(null);
@@ -117,7 +111,7 @@ export function BillWorkspace({
   const [splitting, setSplitting] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
-  const workerRef = useRef<Worker | null>(null);
+  const scanControllerRef = useRef<AbortController | null>(null);
   const generationRef = useRef(0);
   const revisionRef = useRef(0);
   const allowed = !requireRestaurant || (!!restaurant && canSplit(restaurant));
@@ -187,7 +181,7 @@ export function BillWorkspace({
       // This is a cancellation counter, not a DOM ref; invalidate in-flight OCR.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       generationRef.current++;
-      void workerRef.current?.terminate();
+      scanControllerRef.current?.abort();
     };
   }, []);
 
@@ -329,12 +323,14 @@ export function BillWorkspace({
     )
       return;
     if (restaurant?.id !== next.id) {
+      generationRef.current++;
+      scanControllerRef.current?.abort();
+      setScanning(false);
       setBill(emptyBill());
       setSplit(null);
       goToStage(0);
       setPreview("");
       setRawText("");
-      setScanReview("");
       setDetectedSubtotal(null);
     }
     setRestaurant(next);
@@ -354,14 +350,13 @@ export function BillWorkspace({
     )
       return;
     generationRef.current++;
-    void workerRef.current?.terminate();
-    workerRef.current = null;
+    scanControllerRef.current?.abort();
+    scanControllerRef.current = null;
     setBill(emptyBill());
     goToStage(0);
     setSplit(null);
     setPreview("");
     setRawText("");
-    setScanReview("");
     setDetectedSubtotal(null);
     setError("");
     setNotice("");
@@ -419,82 +414,47 @@ export function BillWorkspace({
     setError("");
     setNotice("");
     setScanning(true);
-    setScanReview("");
     setScanLabel("Straightening your receipt");
-    setProgress(0);
     setPreview(URL.createObjectURL(file));
     const generation = ++generationRef.current;
-    let worker: Worker | null = null;
+    const controller = new AbortController();
+    scanControllerRef.current = controller;
     try {
-      const [prepared, { createWorker, PSM }] = await Promise.all([
-        prepareReceiptImage(file),
-        import("tesseract.js"),
-      ]);
+      const prepared = await prepareReceiptImage(file);
       if (generation !== generationRef.current) return;
-      const separators = findReceiptSeparators(prepared);
+      const image = encodeReceiptImage(prepared);
       setScanLabel("Reading your receipt");
-      worker = await createWorker(language, 1, {
-        logger: (message) => {
-          if (
-            generation === generationRef.current &&
-            message.status === "recognizing text"
-          )
-            setProgress(Math.round(message.progress * 100));
-        },
+      const response = await fetch("/api/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, language, restaurantId: restaurant?.id }),
+        signal: AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(60_000),
+        ]),
       });
+      const result = await response.json();
       if (generation !== generationRef.current) return;
-      workerRef.current = worker;
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.AUTO,
-        preserve_interword_spaces: "1",
-        user_defined_dpi: "300",
-      });
-      const result = await worker.recognize(
-        prepared,
-        { rotateAuto: true },
-        { text: true, blocks: true },
-      );
-      if (generation !== generationRef.current) return;
-      let layout = readReceiptLayout(result.data, separators);
-      if (
-        language.includes("ara") &&
-        layout.uncertainNames &&
-        /[\u0620-\u064a]/.test(layout.text)
-      ) {
-        setScanLabel("Checking Arabic item names");
-        setProgress(0);
-        // A second language-specific pass can clarify names. Prices and quantities
-        // always come from the original multilingual pass, never this retry.
-        await worker.reinitialize("ara");
-        await worker.setParameters({
-          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-          preserve_interword_spaces: "1",
-          user_defined_dpi: "300",
-        });
-        const arabicResult = await worker.recognize(
-          prepared,
-          { rotateAuto: true },
-          { text: true, blocks: true },
-        );
-        if (generation !== generationRef.current) return;
-        layout = readReceiptLayout(result.data, separators, arabicResult.data);
-      }
-      setScanReview(
-        layout.uncertainNames
-          ? "A few item names were unclear. Please check their spelling against your receipt before continuing."
-          : "",
-      );
-      setRawText(layout.text);
-      applyReceipt(layout.text, layout.restaurantName);
-    } catch {
-      if (generation === generationRef.current)
+      if (!response.ok) {
         setError(
-          "We couldn’t scan this image. Check your connection for the OCR language download, try another photo, or add items manually.",
+          typeof result.error === "string"
+            ? result.error
+            : "We couldn’t scan this receipt. Please try again.",
+        );
+        return;
+      }
+      if (typeof result.text !== "string")
+        throw new Error("Invalid scan response");
+      setRawText(result.text);
+      applyReceipt(result.text, result.restaurantName);
+    } catch {
+      if (generation === generationRef.current && !controller.signal.aborted)
+        setError(
+          "We couldn’t scan this image. Check your connection, try another photo, or add items manually.",
         );
     } finally {
-      if (worker) await worker.terminate();
       if (generation === generationRef.current) {
-        workerRef.current = null;
+        scanControllerRef.current = null;
         setScanning(false);
       }
     }
@@ -859,17 +819,21 @@ export function BillWorkspace({
                     </div>
                     <h3>
                       {scanning
-                        ? `${scanLabel}… ${progress}%`
+                        ? `${scanLabel}…`
                         : "A photo is worth a thousand calculations."}
                     </h3>
                     <p>
                       {scanning
-                        ? "Your image stays on this device. Just a moment."
+                        ? "OCR.Space is reading your receipt. Just a moment."
                         : "Drop your receipt here, or choose an option below."}
                     </p>
                     {scanning ? (
-                      <div className="scan-progress">
-                        <div style={{ width: `${Math.max(progress, 4)}%` }} />
+                      <div
+                        className="scan-progress"
+                        role="status"
+                        aria-label={scanLabel}
+                      >
+                        <div className="scan-progress-indeterminate" />
                       </div>
                     ) : (
                       <div className="upload-actions">
@@ -920,8 +884,7 @@ export function BillWorkspace({
                   </div>
                   <div className="receipt-options">
                     <span>
-                      <ShieldCheck size={15} /> Your receipt stays on your
-                      device
+                      <ShieldCheck size={15} /> Images are sent to OCR.Space
                     </span>
                     <label>
                       Receipt language{" "}
@@ -962,7 +925,6 @@ export function BillWorkspace({
                         setDetectedSubtotal(null);
                         setPreview("");
                         setRawText("");
-                        setScanReview("");
                         setNotice(
                           "Sample receipt loaded. These are example items, not your restaurant’s menu.",
                         );
@@ -1127,12 +1089,6 @@ export function BillWorkspace({
                       Receipt subtotal: {money(detectedSubtotal, bill.currency)}
                       . Your items add up to {money(total, bill.currency)}.
                       Check for missing items or discounts.
-                    </div>
-                  )}
-                  {scanReview && (
-                    <div className="message warning" role="status">
-                      <CircleHelp size={16} />
-                      <span>{scanReview}</span>
                     </div>
                   )}
                   <div className="item-table-head">
@@ -1706,7 +1662,7 @@ export function BillWorkspace({
                 [
                   Camera,
                   "Snap and double-check",
-                  "Upload a receipt or use your camera. English and Arabic OCR runs on your device. Review the item names and amounts; scans can make mistakes.",
+                  "Upload a receipt or use your camera. Your image is sent to OCR.Space to read English and Arabic text. We don’t save receipt images. Review the item names and amounts; scans can make mistakes.",
                 ],
                 [
                   Users,

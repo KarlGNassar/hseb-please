@@ -1,0 +1,13 @@
+diff --git a/index.js b/index.js
+index b57a51b909a50d80160594a59c11510b3083fc5e..8c53209e9951dc5fd17c9d02c65ecbe7f88fb621 100644
+--- a/index.js
++++ b/index.js
+@@ -72,7 +72,7 @@ async function ocrSpace(input, options = {}) {
+     const { data } = await axios(request);
+     return data;
+   } catch (error) {
+-    console.error(error);
++    // The host handles errors; Axios errors may contain API keys and image data.
+     throw error;
+   }
+ }
